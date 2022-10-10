@@ -1,0 +1,2 @@
+# bayes
+Bayes class
