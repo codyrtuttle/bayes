@@ -1,0 +1,191 @@
+---
+title: "Bayes Class Week 2"
+author: "Cody R. Tuttle"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(janitor)
+library(patchwork)
+
+options(scipen = 999)
+```
+
+
+## Statistical Rethinking 
+
+### Globe Tossing Water Proportion 
+
+***in Tidyverse style***
+
+Overall goal: calculate the proportion of water on Earth given data about how many random points on a globe land on water (*i.e.*, you spin the globe and stop it at a random spot, does your finger land on water or land)
+
+Assume that out of 9 globe tosses, 6 of them land on water, i.e.:
+
+```{r}
+tosses <- c("W", "L", "W", "W", "L", "W", "L", "W", "W")
+```
+
+Given this data (likelihood), what's the proportion of water on the globe (posterior)?
+
+- make a list of all the possible proportions it could be (essentially anything from 0 to 1, 0% to 100%)
+- calculate the number of posible pathways to get to those possible proportions
+
+#### Grid approximation
+
+- For each possible value of *p* (the proportion of water on Earth that we're trying to calculate), we need to compute the product *Pr(W, L | p) X Pr(p)*, or the  likelihood (data: *Pr(W, L | p)* ) times the the prior (*Pr(p)*), which we'll calculate in a few different ways
+
+We'll do this in code:
+
+```{r}
+globe_tossing <- 
+  tibble(
+    # make grid of possible values of p
+    p_grid = seq(from = 0, to = 1, length.out = 10000), 
+    # make uniform prior (prior = 1 for all possibilities)
+    prior_uni = 1, 
+    # make index 
+    index = 1:10000
+  ) %>% 
+  # make beta prior with shape three 1 to compare with uniform prior
+  mutate(
+    prior_beta = dbeta(p_grid, shape1 = 3, shape2 = 1)
+  ) %>% 
+  # make likelihood (data): 6 of 9 globe tosses are water
+  mutate(
+    likelihood = dbinom(6, size = 9, prob = p_grid)
+  ) %>% 
+  # calculate posteriors for uniform and beta priors by calculating likelihood * prior
+  mutate(
+    posterior_uni = 
+      (likelihood * prior_uni) / sum(likelihood * prior_uni), 
+    posterior_beta = 
+      (likelihood * prior_beta) / sum(likelihood * prior_beta)
+  )
+
+head(globe_tossing) %>% 
+  knitr::kable()
+```
+
+Now that we have the data set up, we can plot what's going on here
+
+```{r}
+# plot the grid and priors
+
+p_grid <- globe_tossing %>% 
+  ggplot(aes(x = index, y = p_grid)) +
+  geom_line(size = 3)
+
+# plot uniform prior
+
+prior_uni <- globe_tossing %>% 
+  ggplot(aes(x = index, y = prior_uni)) +
+  geom_line(size = 3)
+
+# plot beta prior
+
+prior_beta <- globe_tossing %>% 
+  ggplot(aes(x = index, y = prior_beta)) +
+  geom_line(size = 3)
+
+p_grid / (prior_uni | prior_beta)
+```
+
+```{r}
+# plot posteriors!
+
+posterior_uni <- globe_tossing %>% 
+  ggplot(aes(x = p_grid, y = posterior_uni)) +
+  geom_line(size = 3)
+
+posterior_beta <- globe_tossing %>% 
+  ggplot(aes(x = p_grid, y = posterior_beta)) +
+  geom_line(size = 3)
+
+posterior_uni | posterior_beta
+
+```
+
+Let's put those on the same graph to see scales better:
+
+```{r}
+globe_tossing %>% 
+  select(p_grid, starts_with("posterior")) %>% 
+  pivot_longer(cols = starts_with("posterior")) %>% 
+  ggplot(aes(x = p_grid, y = value, fill = name)) +
+  geom_area(position = position_identity(), alpha = 0.5)
+```
+
+##### Working with the posterior
+
+We now have posterior distributions for two different priors - and the word distribution in there is key, because when we work with a posterior, we have to work with the entire distribution, not just a point estimate. This either requires calculus, sampling, or other algorithms, like the Mone Carlo Markov Chain, that I'm sure we'll learn about later. 
+
+Right now we'll look at sampling. This involves taking samples from the posterior distribution and making inferences based on those, whether it be taking summary points (mean or median) or looking at intervals.
+
+###### Point estimates
+
+The first thing we have to do is take samples of the posterior distribution - to be honest I'm still kind of working out why you have to take samples rather than just calculating off of the posterior calculation from the grid approximation?
+
+```{r}
+# take 10,000 samples from the posterior distribution based on the uniform prior
+post_uni_samples <- globe_tossing %>% 
+  slice_sample(n = 10000, weight_by = posterior_uni, replace = T)
+
+head(post_uni_samples)
+```
+
+So it looks like these data are the same structure as the `globe_tossing` table, just with different values of p_grid based on the posterior distribution? That's pretty cool. 
+
+If I'm trying to work out why we work with new samples like this, rather than the grid approximation posterior distribution, would probably be because the original grid approximation table (globe_tossing) only has one posterior estimation value for each value of *p* (p_grid). To get a full sense of the distribution of the posterior you'd need actual observations (samples) of `p_grid` that correspond to the posterior distribution they produce. 
+
+Anyways, now we can take the point estimates for the mean and median, which is pretty easy:
+
+```{r}
+post_uni_samples %>% 
+  summarise(
+    mean = mean(p_grid), 
+    median = median(p_grid)
+  )
+```
+
+Another good way of working with the posterior distribution would be to look at different intervals - basically asking questions like "how much of the posterior is between 50% and 75%?" (as in the proportion of water on Earth is 50%) or "what are the bounds of the middle 80% of the posterior distribution?"
+
+The first question is an interval of defined boundary (i.e., we know which boundaries of *p* we're using, and we want to know how much of the posterior distribution lies within those boundaries). We can explore that question like this:
+
+```{r}
+# how much of the posterior between 50% and 75% water?
+post_uni_samples %>% 
+  count(p_grid > 0.5 & p_grid < .75) %>% 
+  mutate(probabiity = n / sum(n))
+```
+
+If I'm interpreting this right, we take the probability for TRUE (as in, it's in the boundaries we specified in the `count()` function) and look at the probability, which tells us that approximately 60% of the posterior distribution is between 50% and 75% water. I'm not sure if this is entirely accurate, but I think this means that we could be 60% confident that the earth is between 50 and 75% water, based on our unique data and the prior we specified. There's definitely a chance I'm overextending that logic, but I think that's it?
+
+Either way, heres' the same question graphically:
+
+```{r}
+globe_tossing %>% 
+  ggplot(aes(x = p_grid, y = posterior_uni)) +
+  geom_line() +
+  geom_area(data = filter(globe_tossing, p_grid > 0.5 & p_grid < 0.75))
+```
+
+The next question is one of defined mass - as in, we know how much of the posterior distribution we want to capture, and we want to know which values of *p* bound that mass of the distribution.
+
+```{r}
+# the middle 80% of the posterior probability lies between which two values of p?
+post_uni_samples %>% 
+  summarise(
+    q = c(0.1, 0.9), # middle 80%, between 10th and 90th percentile
+    percentile = quantile(p_grid, q)
+  ) %>% 
+  pivot_wider(names_from = q, values_from = percentile)
+```
+
+I interpret this to mean that the middle 80% of the distribution falls between the Earth being 44% and 81% water?
